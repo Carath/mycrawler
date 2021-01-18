@@ -28,23 +28,25 @@ int main(void)
 	////////////////////////////////////////////////////////////
 	// Printing a page content (html only):
 
-	// PageContent *pageContent = initPageContent();
+	PageContent *pageContent = initPageContent();
+	CrawlingResult *found_entries = initCrawlingResult(50);
 
-	// fillPageContent(curl_handle, pageContent, the_url);
+	fillPageContent(curl_handle, pageContent, the_url);
 
-	// printPageContent(pageContent);
+	searchEntries(found_entries, pageContent, "<a href='https://www.twitch.tv/", ">", "", "");
 
-	// freePageContent(&pageContent);
+	printCrawlingResult(found_entries);
+
+	freeCrawlingResult(&found_entries);
+	freePageContent(&pageContent);
 
 	////////////////////////////////////////////////////////////
 	// Crawling phase:
 
-	int max_url_number = 50;
-	int max_url_length = 250;
-	int max_webpages_tovisit = 10;
+	// int max_url_number = 50;
+	// int max_webpages_tovisit = 10;
 
-	// crawl(the_url, max_url_number, max_url_length, 1);
-	crawl(curl_handle, the_url, max_url_number, max_url_length, max_webpages_tovisit);
+	// crawl(curl_handle, the_url, max_url_number, max_webpages_tovisit);
 
 	////////////////////////////////////////////////////////////
 	// Cleaning:
@@ -60,3 +62,5 @@ int main(void)
 
 // UTF8 topic:
 // https://stackoverflow.com/questions/21216307/how-to-decode-an-uri-with-utf-8-characters-in-c
+
+// Trailing '/' at url end: to be removed for avoiding redundencies!

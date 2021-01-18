@@ -8,6 +8,9 @@
 #include "get_time.h"
 
 
+#define BUFFER_SIZE 1024
+
+
 // Returns SUCCESS when no issue arose, FAILURE else. Define as a macro,
 // in order to get nice debugging  data from PRINT_FILE_LOCATION().
 #define checkMaxEntryNumberReached(result)														\
@@ -29,12 +32,11 @@
 })
 
 
-CrawlingResult* initCrawlingResult(int entryNumber, int entryMaxLength)
+CrawlingResult* initCrawlingResult(int entryNumber)
 {
 	CrawlingResult *result = (CrawlingResult*) calloc(1, sizeof(CrawlingResult));
 
 	*(int*) &(result -> entryNumber) = entryNumber;
-	*(int*) &(result -> entryMaxLength) = entryMaxLength;
 	// currentIndex left to 0.
 
 	result -> entryArray = (char**) calloc(entryNumber, sizeof(char*));
@@ -43,17 +45,6 @@ CrawlingResult* initCrawlingResult(int entryNumber, int entryMaxLength)
 	{
 		printf("\nOut of memory!\n");
 		exit(EXIT_FAILURE);
-	}
-
-	for (int i = 0; i < result -> entryNumber; ++i)
-	{
-		result -> entryArray[i] = (char*) calloc(entryMaxLength + 1, sizeof(char));
-
-		if (!result -> entryArray[i])
-		{
-			printf("\nOut of memory!\n");
-			exit(EXIT_FAILURE);
-		}
 	}
 
 	return result;
@@ -68,10 +59,7 @@ void freeCrawlingResult(CrawlingResult **result_address)
 	if ((*result_address) -> entryArray)
 	{
 		for (int i = 0; i < (*result_address) -> entryNumber; ++i)
-		{
-			if ((*result_address) -> entryArray[i])
-				free((*result_address) -> entryArray[i]);
-		}
+			free((*result_address) -> entryArray[i]);
 	}
 
 	free((*result_address) -> entryArray);
@@ -88,14 +76,18 @@ void printCrawlingResult(const CrawlingResult *result)
 		return;
 	}
 
-	printf("\n>> Crawling result: entryNumber: %d, entryMaxLength: %d, currentIndex: %d (private)\n",
-		result -> entryNumber, result -> entryMaxLength, result -> currentIndex);
+	printf("\n>> Crawling result: entryNumber: %d, currentIndex: %d (private)\n",
+		result -> entryNumber, result -> currentIndex);
 
 	printf("Found entries:\n\n");
 
-	for (int i = 0; i < result -> currentIndex; ++i)
+	if (result -> entryArray)
 	{
-		printf("%s\n", result -> entryArray[i]);
+		for (int i = 0; i < result -> currentIndex; ++i)
+		{
+			if (result -> entryArray[i])
+				printf("%s\n", result -> entryArray[i]);
+		}
 	}
 }
 
@@ -120,17 +112,21 @@ int addEntry(CrawlingResult *result, const char *entry)
 	if (checkMaxEntryNumberReached(result) == FAILURE)
 		return FAILURE;
 
-	if (strlen(entry) > result -> entryMaxLength)
-	{
-		printf("\nMaximum entry length (%d) is too small! Entry: '%s'\n", result -> entryMaxLength, entry);
-		return FAILURE;
-	}
-
 	int index = getStringIndex(result, entry);
 
 	if (index == result -> currentIndex) // entry not existing yet, it can thus be added.
 	{
-		strncpy(result -> entryArray[result -> currentIndex], entry, result -> entryMaxLength);
+		size_t full_entry_size = strlen(entry) + 1;
+		result -> entryArray[result -> currentIndex] = (char*) calloc(full_entry_size, sizeof(char));
+
+		if (!result -> entryArray[result -> currentIndex])
+		{
+			printf("\nMemory allocation failed for result of index '%d', and entry: '%s'\n",
+				result -> currentIndex, entry);
+			return FAILURE;
+		}
+
+		strncpy(result -> entryArray[result -> currentIndex], entry, full_entry_size);
 		++*(int*) &(result -> currentIndex);
 		return SUCCESS;
 	}
@@ -141,18 +137,25 @@ int addEntry(CrawlingResult *result, const char *entry)
 
 // Search entries (e.g urls) in the given html string, and add it to 'found_entries'.
 void searchEntries(CrawlingResult *found_entries, const PageContent *pageContent,
-	const char *start_tag, const char *end_tag, const char *prefix, const char *sufix)
+	const char *start_tag, const char *end_tag, const char *prefix, const char *suffix)
 {
 	if (VERBOSE_MODE >= 2)
 		printf("\n-> Search for the tags: '%s' and '%s':\n\n", start_tag, end_tag);
 
-	if (checkMaxEntryNumberReached(found_entries) == FAILURE)
+	if (!pageContent || !found_entries || checkMaxEntryNumberReached(found_entries) == FAILURE)
 		return;
 
 	const char *content = pageContent -> content;
-	char *new_entry_buffer = (char*) calloc(found_entries -> entryMaxLength, sizeof(char));
-
 	const size_t start_tag_length = strlen(start_tag), end_tag_length = strlen(end_tag);
+	const size_t prefix_length = strlen(prefix), suffix_length = strlen(suffix);
+
+	if (start_tag_length == 0 || end_tag_length == 0)
+	{
+		printf("\nOne tag is empty, stopping the search.\n");
+		return;
+	}
+
+	char *new_entry_buffer = (char*) calloc(BUFFER_SIZE, sizeof(char)); // to be reallocated, later.
 	size_t start_index = 0, content_length = pageContent -> length;
 
 	while (start_index < content_length)
@@ -171,21 +174,30 @@ void searchEntries(CrawlingResult *found_entries, const PageContent *pageContent
 			++end_index;
 
 		if (end_index > end_bound)
-			printf("\nEnding tag '%s' not found!\n", end_tag);
-
-		else // Adding the new found entry to the entry array!
 		{
-			size_t offset = start_index + start_tag_length;
-
-			snprintf(new_entry_buffer, found_entries -> entryMaxLength, "%s%.*s%s",
-				prefix, (int) (end_index - offset), content + offset, sufix);
-
-			if (VERBOSE_MODE >= 1)
-				printf("Found: %s\n", new_entry_buffer);
-
-			if (addEntry(found_entries, new_entry_buffer) == FAILURE)
-				goto end; // stopping the search here.
+			printf("\nEnding tag '%s' not found! Stopping the search.\n", end_tag);
+			goto end;
 		}
+
+		// Adding the new found entry to the entry array:
+
+		size_t offset = start_index + start_tag_length, content_chunk_size = end_index - offset;
+		size_t entry_length = prefix_length + content_chunk_size + suffix_length;
+
+		if (entry_length >= BUFFER_SIZE)
+		{
+			printf("\nBuffer too small! Sizes: %ld vs %d.\n", entry_length, BUFFER_SIZE);
+			goto end;
+		}
+
+		snprintf(new_entry_buffer, BUFFER_SIZE, "%s%.*s%s",
+			prefix, (int) content_chunk_size, content + offset, suffix);
+
+		if (VERBOSE_MODE >= 1)
+			printf("Found: %s\n", new_entry_buffer);
+
+		if (addEntry(found_entries, new_entry_buffer) == FAILURE)
+			goto end;
 
 		start_index = end_index + end_tag_length;
 	}
@@ -195,26 +207,27 @@ void searchEntries(CrawlingResult *found_entries, const PageContent *pageContent
 }
 
 
-// Experimental: replacing every '\'' by a '\"'.
-void cleanup(char *string)
+// Replacing every '\'' by a '\"'.
+static void cleanup(char *string)
 {
-	while (*string != '\0')
+	if (!string)
+		return;
+
+	for ( ; *string != '\0'; ++string)
 	{
 		if (*string == '\'')
 			*string = '\"';
-
-		++string;
 	}
 }
 
 
 // Crawls the web starting from the given url, and retrieve all urls in that page.
-void crawl(void *curl_handle, const char *url, int max_url_number, int max_url_length, int max_webpages_tovisit)
+void crawl(void *curl_handle, const char *url, int max_url_number, int max_webpages_tovisit)
 {
 	printf("\n-> Crawling starting from the webpage: '%s'\n\n", url);
 
 	PageContent *pageContent = initPageContent();
-	CrawlingResult *found_urls = initCrawlingResult(max_url_number, max_url_length);
+	CrawlingResult *found_urls = initCrawlingResult(max_url_number);
 
 	if (addEntry(found_urls, url) == FAILURE) // to be sure the starting url isn't parsed again.
 	{
@@ -245,11 +258,12 @@ void crawl(void *curl_handle, const char *url, int max_url_number, int max_url_l
 		if (checkMaxEntryNumberReached(found_urls) == FAILURE)
 			break;
 
-		printf("\nFalling asleep...\n");
-
-		double time_waited = adaptive_sleep(QUERY_COOLDOWN, get_time() - time_start);
-
-		printf("Waking up! (after %.3f s)\n", time_waited);
+		if (max_webpages_tovisit > 1)
+		{
+			printf("\nFalling asleep...\n");
+			double time_waited = adaptive_sleep(QUERY_COOLDOWN, get_time() - time_start);
+			printf("Waking up! (after %.3f s)\n", time_waited);
+		}
 	}
 
 	if (VERBOSE_MODE >= 1)
